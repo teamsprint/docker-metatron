@@ -1,6 +1,6 @@
 # Metatron Docker Image (Fully Engineered)
 
-teamsprint/metatron:3.3.0
+teamsprint/metatron:3.3.1
 
 [![DockerPulls](https://img.shields.io/docker/pulls/teamsprint/docker-metatron.svg)](https://registry.hub.docker.com/u/teamsprint/docker-metatron/)
 [![DockerStars](https://img.shields.io/docker/stars/teamsprint/docker-metatron.svg)](https://registry.hub.docker.com/u/teamsprint/docker-metatron/)

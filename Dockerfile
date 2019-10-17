@@ -22,10 +22,10 @@ ADD conf/metatron-env.sh $METATRON_HOME/conf
 ADD Dockerfile /
 ADD README.md /
 
-ADD script/init-metatron-metadb.sh /
 ADD script/init-metatron.sh /
 ADD script/start-metatron.sh /
 ADD script/stop-metatron.sh /
+ADD script/prepare-all-metatron.sh /
 
 CMD ["/bin/bash"]
 

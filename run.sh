@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME=teamsprint/metatron:3.3.0
+IMAGE_NAME=teamsprint/metatron:3.3.1
 CONTAINER_NAME=metatron
 
 sudo docker run -d -it --name $CONTAINER_NAME \

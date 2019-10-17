@@ -30,3 +30,7 @@ send \"quit\\r\"
 expect eof
 "
 
+cd $METATRON_HOME
+bin/metatron.sh --init start
+tail -f logs/*
+
