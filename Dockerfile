@@ -16,16 +16,16 @@ RUN cd servers; ln -s `ls | grep metatron-discovery-` metatron-discovery; cd ..
 
 ENV METATRON_HOME /servers/metatron-discovery
 
-ADD application-config.yaml $METATRON_HOME/conf
-ADD metatron-env.sh $METATRON_HOME/conf
+ADD conf/application-config.yaml $METATRON_HOME/conf
+ADD conf/metatron-env.sh $METATRON_HOME/conf
 
 ADD Dockerfile /
 ADD README.md /
 
-ADD init-polaris.sh /
-ADD init-metatron.sh /
-ADD start-metatron.sh /
-ADD stop-metatron.sh /
+ADD script/init-metatron-metadb.sh /
+ADD script/init-metatron.sh /
+ADD script/start-metatron.sh /
+ADD script/stop-metatron.sh /
 
 CMD ["/bin/bash"]
 

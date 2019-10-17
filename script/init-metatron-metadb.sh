@@ -6,6 +6,7 @@ set -x
 ./init-pw.sh
 ./init-db.sh
 ./init-polaris.sh
+./hive-start.sh
 cd $DRUID_HOME
 ./start-single.sh
 cd $METATRON_HOME
