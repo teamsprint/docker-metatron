@@ -12,7 +12,7 @@ teamsprint/jdk:8<br/>
 teamsprint/hadoop:2.7.3<br/>
 teamsprint/mysql:5.7<br/>
 teamsprint/hive:2.3<br/>
-teamsprint/druid:0.9.1
+teamsprint/druid:0.9.1<br/>
 
 # Build the image
 
@@ -37,22 +37,22 @@ run destroy.sh
 ./test-hadoop.sh (Optional)<br/>
 
 ./init-mysql.sh (MySQL setting)<br/>
-
-./start-mysql.sh (optional)<br/>
+./start-mysql.sh (Optional; already started by init-mysql.sh)<br/>
 ./conn-mysql.sh (Optional)<br/>
+./stop-mysql.sh (Optional)<br/>
 
-./init-hive-metastore.sh<br/>
-./start-hive.sh<br/>
+./init-hive-metastore.sh (Mandatory)<br/>
+./start-hive.sh (Optional)<br/>
+./conn-hive.sh (Optional)<br/>
+./stop-hive.sh (Optional)<br/>
 
 cd $DRUID_HOME<br/>
 ./start-single.sh<br/>
+./stop-single.sh<br/>
 
 cd $METATRON_HOME<br/>
 bin/metatron.sh --init start<br/>
-
-# Stop Metatron
-
-bin/metatron.sh stop
+bin/metatron.sh stop<br/>
 
 # WARNING: DOCKER DEFAULT MEMORY SHOULD BE >= 4G
 
