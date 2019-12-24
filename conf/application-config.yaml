@@ -39,5 +39,5 @@ polaris:
   dataprep:
     localBaseDir: ${METATRON_HOME}/dataprep
     hadoopConfDir: ${HADOOP_CONF_DIR}
-    stagingBaseDir: hdfs://localhost:9000/user/hive/dataprep
+    stagingBaseDir: hdfs://localhost/user/hive/dataprep
 
