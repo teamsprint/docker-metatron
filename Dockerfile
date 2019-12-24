@@ -23,6 +23,9 @@ ADD script/start-metatron.sh /
 ADD script/stop-metatron.sh /
 ADD script/prepare-all-metatron.sh /
 
+ADD script/preptool /
+ADD script/preptool-test.sh /
+
 ADD Dockerfile /
 ADD README.md /
 

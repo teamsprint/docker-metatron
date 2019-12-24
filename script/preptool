@@ -1,0 +1,365 @@
+#!/usr/bin/env python
+# encoding:utf8
+
+import argparse, requests, base64, subprocess, os, copy, json, uuid, time
+
+parser = argparse.ArgumentParser()
+
+# We need proper arguments for each purpose.
+# 1. Export / Import
+# 2. Register I.DS
+# 3. Swap I.DS
+# 4. Generate snapshot
+# 5. Druid ingestion (append)
+
+parser.add_argument('-H', '--hostname', help='API server hostname (default: localhost)', default='localhost')
+parser.add_argument('-p', '--port', help='API server port (default: 8180)', default='8180')
+parser.add_argument('-E', '--export-dataflow-name', help='Export a dataflow as JSON')
+parser.add_argument('-I', '--import-file', help='Import a dataflow from JSON file')
+parser.add_argument('-f', '--file-path', help='File pathname to upload')
+parser.add_argument('-c', '--conn-name', help='Data connection name')
+parser.add_argument('-q', '--query-stmt', help='Query statement')
+parser.add_argument('-n', '--new-ids-name', help='New imported dataset name')
+parser.add_argument('-o', '--old-ids-name', help='Old imported dataset name')
+parser.add_argument('-F', '--dataflow-name', help='Dataflow name')
+parser.add_argument('-w', '--wds-name', help='Wrangled dataset name')
+parser.add_argument('-s', '--new-snapshot-name', help='New snapshot name', default='snapshot1')
+parser.add_argument('-e', '--engine-type', help='ETL engine (EMBEDDED or SPARK)', default='EMBEDDED')
+parser.add_argument('-t', '--target-path', help='Download target pathname', default='')
+parser.add_argument('-S', '--target-snapshot-name', help='Snapshot name for downloading', default='snapshot1')
+parser.add_argument('-d', '--datasource', help='Metatron datasource name')
+parser.add_argument('--manual-colcnt', help='Manual max column count when the max column count', default='0')
+
+args = parser.parse_args()
+
+
+def is_uuid(s):
+    try:
+        uuid.UUID(s)
+    except Exception:
+        return False
+    return True
+
+
+def search_data_connection(dc_name):
+    r = requests.post(CONNECTIONS_URL + '/filter?projection=list&page=0&size=20&sort=createdTime,desc', headers=HDR,
+                      data=json.dumps({'containsText': dc_name}))
+    for d in r.json()['_embedded']['connections']:
+        return d['id']
+    return None
+
+
+def get_dc_id(dc_name):
+    assert dc_name
+    return dc_name if is_uuid(dc_name) else search_data_connection(dc_name)
+
+
+def search_dataset(ds_name, ds_type):
+    params = {'dsName': ds_name}
+    r = requests.get(DATASETS_URL + '/search/findByDsNameContaining', params=params, headers=HDR)
+    for d in r.json()['_embedded']['preparationdatasets']:
+        if d['dsType'] == ds_type:
+            return d['dsId']
+
+
+def get_ds_id(ds_name, ds_type):
+    return ds_name if is_uuid(ds_name) else search_dataset(ds_name, ds_type)
+
+
+def search_dataflow(df_name):
+    r = requests.get(DATAFLOWS_URL + '/search/findByDfNameContaining?dfName=%s' % df_name, headers=HDR)
+    for d in r.json()['_embedded']['preparationdataflows']:
+        return d['dfId']
+    return None
+
+
+def get_df_id(df_name):
+    return df_name if is_uuid(df_name) else search_dataflow(df_name)
+
+
+# 1. Get auth token
+def get_token():
+    auth_key = base64.b64encode('polaris_client:polaris'.encode()).decode()
+    auth_hdr = {'Content-Type': 'application/json', 'Authorization': 'Basic ' + auth_key}
+    r = requests.post(METATRON_URL + '/oauth/token?grant_type=password&username=admin&password=admin', headers=auth_hdr)
+    return r.json()['access_token']
+
+
+# 2. Get upload policy
+def get_upload_policy():
+    j = requests.get(DATASETS_URL + '/file_upload', headers=HDR).json()
+    return j['upload_id'], j['limit_size']
+
+
+# 3. Upload file chunks
+def post_upload_file(upload_id, limit_size, file_size, basename):
+    hdr = copy.deepcopy(HDR)
+    del hdr['Content-Type']  # Content-Type becomes multipart/form-data when files is not None
+    params = {'name': basename, 'chunk': 0, 'chunks': 1, 'storage_type': 'LOCAL', 'upload_id': upload_id,
+              'chunk_size': limit_size, 'total_size': file_size}
+    files = {'file': open(args.file_path, 'rb')}
+    r = requests.post(DATASETS_URL + '/file_upload', params=params, headers=hdr, files=files)
+    return r.json()['storedUri']
+
+
+def get_file_format(basename):
+    if basename.endswith('.xlsx') or basename.endswith('.xls'):
+        return 'EXCEL'
+    elif basename.endswith('.json'):
+        return 'JSON'
+    else:
+        return 'CSV'
+
+
+# 5-1. Create imported dataset - file
+def post_create_file_dataset(basename, stored_uri, import_type='URI'):
+    args.new_ids_name = args.new_ids_name if args.new_ids_name else basename
+    data = {'delimiter': ',', 'quoteChar': '"', 'dsName': args.new_ids_name, 'dsType': 'IMPORTED',
+            'importType': import_type, 'filenameBeforeUpload': basename, 'storageType': 'LOCAL',
+            'storedUri': stored_uri, 'fileFormat': get_file_format(basename)}
+    if args.manual_colcnt:
+        data['manualColcnt'] = args.manual_colcnt
+    r = requests.post(DATASETS_URL, headers=HDR, data=json.dumps(data))
+    if r.status_code == 200:
+        print('File dataset created: basename=%s ids_name=%s stored_uri=%s' % (basename, args.new_ids_name, stored_uri))
+        return r.json()['dsId']
+    else:
+        print('Creating file type dataset failed: ' + str(r))
+        return None
+
+
+# 5-2. Create imported dataset - query
+def post_create_database_dataset(conn_name, query_stmt, db_name=None, tbl_name=None):
+    args.new_ids_name = args.new_ids_name if args.new_ids_name else conn_name
+    dc_id = get_dc_id(conn_name)
+    if query_stmt:
+        data = {'dcId': dc_id, 'dsName': args.new_ids_name, 'dsType': 'IMPORTED', 'importType': 'DATABASE',
+                'queryStmt': query_stmt, 'rsType': 'QUERY'}
+    else:
+        data = {'dcId': dc_id, 'dsName': args.new_ids_name, 'dsType': 'IMPORTED', 'importType': 'DATABASE',
+                'dbName': db_name,
+                'tblName': tbl_name, 'rsType': 'TABLE'}
+
+    r = requests.post(DATASETS_URL, headers=HDR, data=json.dumps(data))
+    if r.status_code == 200:
+        print('Database dataset created: ids_name=%s query_stmt=%s' % (args.new_ids_name, query_stmt))
+        return r.json()['dsId']
+    else:
+        print('Creating database type dataset failed: ' + str(r))
+        return None
+
+
+# 7. Get dataset details
+def get_dataset_details(ds_id):
+    d = requests.get(DATASETS_URL + '/' + ds_id, headers=HDR).json()
+    print(json.dumps(d, indent=4))
+
+
+def post_create_dataflow(df_name):
+    r = requests.post(DATAFLOWS_URL, headers=HDR, data=json.dumps({'dfName': df_name, 'datasets': []}))
+    return r.json()['dfId']
+
+
+def post_add_imported_dataset(df_id, new_ids_ids):
+    data = {'dsIds': new_ids_ids, 'forSwap': True}
+    r = requests.put(DATAFLOWS_URL + '/' + df_id + '/update_datasets', headers=HDR, data=json.dumps(data))
+    return r.json()['datasets']
+
+
+def post_add_wrangled_dataset(df_id, ids_id, wds_name):
+    data = {'dfId': df_id, 'predefinedDsName': wds_name}
+    r = requests.post(DATASETS_URL + '/' + ids_id + '/transform', headers=HDR, data=json.dumps(data))
+    return r.json()['wrangledDsId']
+
+
+def trim(d, keep_keys):
+    return dict((key, d[key]) for key in keep_keys if key in d)
+
+
+def export_dataset(ds_id):
+    d = requests.get(DATASETS_URL + '/' + ds_id, headers=HDR).json()
+    return trim(d, ['dsId', 'dsName', 'dsDesc', 'dsType', 'importType', 'rsType', 'dbName', 'tblName', 'queryStmt',
+                    'transformRules', 'storedUri', 'dcName', 'filenameBeforeUpload'])
+
+
+def export_dataflow(df_id):
+    d = requests.get(DATAFLOWS_URL + '/' + df_id, headers=HDR).json()
+    rd = {'datasets': [], 'dataflow': trim(d, ['dfName', 'dfDesc']),
+          'upstreammap': requests.get(DATAFLOWS_URL + '/' + df_id + '/upstreammap', headers=HDR).json()}
+    for dataset in d['datasets']:
+        rd['datasets'].append(export_dataset(dataset['dsId']))
+    print(json.dumps(rd, indent=4))
+
+
+def import_ids(dsl):
+    ids_id_map = {}
+    for d in dsl:
+        if d['dsType'] == 'IMPORTED':
+            # NOTE: UPLOAD type I.DS are automatically changed into URI type.
+            if d['importType'] == 'UPLOAD' or d['importType'] == 'URI':
+                ids_id_map[d['dsId']] = post_create_file_dataset(d['filenameBeforeUpload'], d['storedUri'])
+            elif d['importType'] == 'DATABASE':
+                dc_id = search_data_connection(d['dcName'])
+                if dc_id is None:
+                    continue
+                if 'queryStmt' in d:
+                    ids_id_map[d['dsId']] = post_create_database_dataset(dc_id, d['dsName'], d['queryStmt'])
+                else:
+                    ids_id_map[d['dsId']] = post_create_database_dataset(dc_id, d['dsName'], None, d['dbName'],
+                                                                         d['tblName'])
+    return ids_id_map
+
+
+def import_dataflow(d, new_ids_ids):
+    df_id = post_create_dataflow(d['dfName'])
+    return df_id, post_add_imported_dataset(df_id, new_ids_ids)
+
+
+def find_ds(datasets, ds_id):
+    for i in range(len(datasets)):
+        d = datasets[i]
+        if d['dsId'] == ds_id:
+            return i, d
+    return None, None
+
+
+def have_upstream_not_done(datasets, done_ids, upstream_map, ds_id):
+    for relation in upstream_map:
+        if relation['dsId'] == ds_id:
+            i, upstream_ds = find_ds(datasets, relation['upstreamDsId'])
+            if upstream_ds['dsType'] == 'WRANGLED':
+                if upstream_ds['dsId'] not in done_ids:
+                    return True
+    return False
+
+
+def convert_rule(wds_id_map, rule):
+    rule_string = rule['ruleString']
+    json_rule_string = rule['jsonRuleString']
+
+    for old_wds_id in wds_id_map:
+        if rule['ruleString'].find(old_wds_id) >= 0:
+            rule_string = rule_string.replace(old_wds_id, wds_id_map[old_wds_id])
+            json_rule_string = json_rule_string.replace(old_wds_id, wds_id_map[old_wds_id])
+
+    return rule_string, json_rule_string
+
+
+def import_wds_one(old_wds_id, wds_id_map):
+    i, dataset = find_ds(d['datasets'], old_wds_id)
+    rules = dataset['transformRules']
+    for i in range(1, len(rules)):
+        rule_string, json_rule_string = convert_rule(wds_id_map, rules[i])
+        data = {'count': 1, 'op': 'APPEND', 'ruleIdx': i - 1, 'ruleString': rule_string,
+                'uiRuleString': json_rule_string}
+        requests.put(DATASETS_URL + '/' + wds_id_map[old_wds_id] + '/transform', headers=HDR, data=json.dumps(data))
+
+
+def import_wds(new_df_id, d, ids_id_map):
+    wds_id_map = {}
+    done_ids = []
+
+    for dataset in d['datasets']:
+        if dataset['dsType'] == 'IMPORTED':
+            continue
+        old_wds_id = dataset['dsId']
+        old_rules = dataset['transformRules']
+        create_rule = old_rules[0]['ruleString']
+        old_ids_id = create_rule.split()[2]
+        new_ids_id = ids_id_map[old_ids_id]
+        wds_id_map[old_wds_id] = post_add_wrangled_dataset(new_df_id, new_ids_id, dataset['dsName'])
+
+    while len(done_ids) < len(wds_id_map):
+        for old_wds_id in wds_id_map:
+            if old_wds_id in done_ids or have_upstream_not_done(d['datasets'], done_ids, d['upstreammap'], old_wds_id):
+                continue
+            import_wds_one(old_wds_id, wds_id_map)
+            done_ids.append(old_wds_id)
+
+
+def post_swap_upstream(df_name, old_ids_name, new_ids_name):
+    assert df_name and old_ids_name and new_ids_name
+    data = {'oldDsId': get_ds_id(old_ids_name, 'IMPORTED'), 'newDsId': get_ds_id(new_ids_name, 'IMPORTED')}
+    r = requests.post(DATAFLOWS_URL + '/' + get_df_id(df_name) + '/swap_upstream', headers=HDR, data=json.dumps(data))
+    assert r.status_code == 200
+
+
+def post_transform_snapshot(wds_id, ss_name, engine_type, local_uri):
+    data = {'ssName': ss_name, 'ssType': 'URI', 'storedUri': local_uri, 'engine': engine_type}
+    print('storedUri=' + local_uri)
+    r = requests.post(DATASETS_URL + '/' + wds_id + '/transform/snapshot', headers=HDR, data=json.dumps(data))
+    assert r.status_code == 200
+    print(r.json())
+    return r.json()['ssId']
+
+
+def get_snapshot_configuration(wds_id):
+    j = requests.get(DATASETS_URL + '/' + wds_id + '/transform/configuration', headers=HDR).json()
+    return j['ss_name'], j['file_uri']['LOCAL']
+
+
+def wait_snapshot_done(ss_id):
+    for i in range(0, 3600):
+        status = requests.get(SNAPSHOTS_URL + '/' + ss_id, headers=HDR).json()['status']
+        if status == 'SUCCEEDED':
+            print('Snapshot done: ss_id=%s elapsed=%ss' % (ss_id, i))
+            return
+        elif status == 'FAILED':
+            print('Snapshot failed: ss_id=%s ran=%ss' % (ss_id, i))
+            return
+        time.sleep(1)
+    print('Snapshot timeout: ss_id=%s timeout=%ss' % (ss_id, 3600))
+
+
+def download_snapshot(ss_id, target_path):
+    params = {'fileType': 'csv'}
+    r = requests.get(SNAPSHOTS_URL + '/' + ss_id + '/' + '/download', params=params, headers=HDR)
+    open(target_path, 'wb').write(r.content)
+
+
+# === Start ===
+METATRON_URL = 'http://%s:%s' % (args.hostname, args.port)
+DATASETS_URL = METATRON_URL + '/api/preparationdatasets'
+DATAFLOWS_URL = METATRON_URL + '/api/preparationdataflows'
+SNAPSHOTS_URL = METATRON_URL + '/api/preparationsnapshots'
+CONNECTIONS_URL = METATRON_URL + '/api/connections'
+
+HDR = {'Authorization': "bearer " + get_token(), 'Content-Type': 'application/json', 'Accept': 'application/json'}
+
+if args.export_dataflow_name:
+    df_name = args.export_dataflow_name
+    export_dataflow(df_name if is_uuid(df_name) else search_dataflow(df_name))
+    exit(0)
+
+if args.import_file:
+    with open(args.import_file, 'rb') as f:
+        d = json.loads(f.read().decode())
+        ids_id_map = import_ids(d['datasets'])
+        new_df_id, datasets = import_dataflow(d['dataflow'], list(ids_id_map.values()))
+        import_wds(new_df_id, d, ids_id_map)
+    exit(0)
+
+if args.file_path:
+    upload_id, limit_size = get_upload_policy()
+    file_size = subprocess.check_output("wc -c %s | awk '{print $1'}" % args.file_path, shell=True).decode().strip()
+    basename = os.path.basename(args.file_path)
+    stored_uri = post_upload_file(upload_id, limit_size, file_size, basename)
+    post_create_file_dataset(basename, stored_uri, 'UPLOAD')
+elif args.query_stmt:
+    post_create_database_dataset(args.conn_name, args.query_stmt)
+
+if args.old_ids_name:
+    post_swap_upstream(args.dataflow_name, args.old_ids_name, args.new_ids_name)
+
+if args.wds_name:
+    assert args.new_snapshot_name
+    wds_id = get_ds_id(args.wds_name, 'WRANGLED')
+    ss_name, local_uri = get_snapshot_configuration(wds_id)
+    ss_name = args.new_snapshot_name if args.new_snapshot_name else ss_name
+    ss_id = post_transform_snapshot(wds_id, ss_name, args.engine_type, local_uri + '.csv')
+    print(ss_id)
+    wait_snapshot_done(ss_id)
+    download_snapshot(ss_id, args.target_path)
+    args.target_snapshot_name = ss_id
+
+# eof
