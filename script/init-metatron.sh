@@ -31,6 +31,5 @@ expect eof
 "
 
 cd $METATRON_HOME
-bin/metatron.sh --init start
-tail -f logs/*
+bin/metatron.sh start
 
