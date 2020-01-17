@@ -23,8 +23,20 @@ ADD script/start-metatron.sh /
 ADD script/stop-metatron.sh /
 ADD script/prepare-all-metatron.sh /
 
-ADD script/preptool /
-ADD script/preptool-test.sh /
+RUN yum install -y https://centos7.iuscommunity.org/ius-release.rpm \
+        && yum install -y python36u python36u-libs python36u-devel python36u-pip \
+        && unlink /bin/python \
+        && ln -s /bin/python3.6 /bin/python \
+        && ln -s /bin/pip3.6 /bin/pip \
+        && pip install requests
+
+RUN mkdir tool
+ADD tool/preptool /tool
+ADD tool/preptool-test.sh /tool
+ADD tool/s5k_1.csv /tool
+
+RUN mkdir sample
+ADD sample/* /sample/
 
 ADD Dockerfile /
 ADD README.md /

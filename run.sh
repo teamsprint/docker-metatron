@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME=teamsprint/metatron:3.3.1
+IMAGE_NAME=teamsprint/metatron:3.4.0
 CONTAINER_NAME=metatron
 
 sudo docker run -d -it --name $CONTAINER_NAME --memory="4g" \

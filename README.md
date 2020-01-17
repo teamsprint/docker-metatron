@@ -1,9 +1,6 @@
 # Metatron Docker Image (Fully Engineered)
 
-teamsprint/metatron:3.3.1
-
-[![DockerPulls](https://img.shields.io/docker/pulls/teamsprint/docker-metatron.svg)](https://registry.hub.docker.com/u/teamsprint/docker-metatron/)
-[![DockerStars](https://img.shields.io/docker/stars/teamsprint/docker-metatron.svg)](https://registry.hub.docker.com/u/teamsprint/docker-metatron/)
+teamsprint/metatron:3.4.0
 
 # Based on (in a row)
 
@@ -47,12 +44,13 @@ run destroy.sh
 ./stop-hive.sh (Optional)<br/>
 
 cd $DRUID_HOME<br/>
-./start-single.sh<br/>
-./stop-single.sh<br/>
+./start-single.sh (Optional)<br/>
+./stop-single.sh (Optional)<br/>
 
 cd $METATRON_HOME<br/>
-bin/metatron.sh --init start<br/>
-bin/metatron.sh stop<br/>
+./init-metatron.sh<br/>
+./start-metatron.sh (Optional; already started by init-metatron.sh)<br/>
+./stop-metatron.sh (Optional)<br/>
 
 # WARNING: DOCKER DEFAULT MEMORY SHOULD BE >= 4G
 
